@@ -37,9 +37,22 @@ for c in CATALOG:
     BY_COURSE_NUM.setdefault(c["course_number"], []).append(c)
 
 
+def _clean(query: str) -> str:
+    """Strip wrapping characters Slack commonly adds when users copy formatted text
+    (backticks from code spans, angle brackets from auto-linked URLs, smart quotes)."""
+    q = query.strip()
+    # Repeatedly strip any combo of these leading/trailing chars
+    strip_chars = "`<>\"'“”‘’ \t"
+    while q and q[0] in strip_chars:
+        q = q[1:]
+    while q and q[-1] in strip_chars:
+        q = q[:-1]
+    return q
+
+
 def find_sections(query: str) -> list[dict]:
     """Resolve a user query to zero, one, or many catalog sections."""
-    q = query.strip()
+    q = _clean(query)
     if not q:
         return []
 
