@@ -49,6 +49,45 @@ python app.py
 
 Socket Mode means no public URL is needed.
 
+## Cloud Deploy (Turso + Render)
+
+Run the bot 24/7 without your laptop.
+
+### 1. Create a Turso database
+
+1. Install the Turso CLI (or use the web dashboard at [turso.tech](https://turso.tech)).
+2. Create a database:
+   ```bash
+   turso db create hls-class-finder
+   ```
+3. Get its URL:
+   ```bash
+   turso db show hls-class-finder --url
+   # libsql://hls-class-finder-<org>.turso.io
+   ```
+4. Create an auth token:
+   ```bash
+   turso db tokens create hls-class-finder
+   ```
+
+Save both values — you'll paste them into Render.
+
+### 2. Deploy to Render
+
+1. Log in to [render.com](https://render.com) and click **New +** → **Blueprint**.
+2. Connect your GitHub and select `kheganm/hls-class-finder`. Render will detect `render.yaml` and create a **Background Worker** named `hls-class-finder`.
+3. When prompted, fill in these five environment variables:
+   - `SLACK_BOT_TOKEN` — `xoxb-…`
+   - `SLACK_APP_TOKEN` — `xapp-…`
+   - `SLACK_ADMIN_USER_IDS` — comma-separated Slack user IDs
+   - `TURSO_DATABASE_URL` — `libsql://…turso.io`
+   - `TURSO_AUTH_TOKEN` — the token you created
+4. Click **Apply**. Render builds and starts the worker. Check the logs — you should see `⚡️ Bolt app is running!`.
+
+Every `git push` to `main` will redeploy automatically.
+
+> **Note on Render free tier:** Background Workers on the free plan sleep after inactivity. Because this bot uses Socket Mode (a persistent websocket), Slack keeps the connection active — but if the worker does sleep, Slack commands will fail until it wakes. If you need hard uptime guarantees, upgrade to the Starter plan (~$7/mo).
+
 ## Updating the Catalog
 
 `courses.json` is the parsed catalog. To regenerate it from a new markdown dump:
@@ -60,6 +99,8 @@ python parse_catalog.py path/to/HLS_Course_Catalog.md
 ## Files
 
 - `app.py` — Slack app with all slash commands
+- `db.py` — database layer (Turso in prod, local SQLite for dev)
 - `parse_catalog.py` — one-shot parser: catalog markdown → `courses.json`
 - `courses.json` — 395 course sections (committed; regenerate as needed)
-- `enrollments.db` — SQLite DB of student enrollments (gitignored)
+- `render.yaml` — Render Blueprint (Background Worker config)
+- `enrollments.db` — local SQLite fallback (gitignored)

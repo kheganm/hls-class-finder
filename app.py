@@ -1,14 +1,14 @@
 import json
 import os
-import sqlite3
 from pathlib import Path
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from db import get_db
+
 app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
-DB_PATH = Path(__file__).parent / "enrollments.db"
 CATALOG_PATH = Path(__file__).parent / "courses.json"
 
 # Comma-separated Slack user IDs (e.g. "U01ABC,U02XYZ") allowed to run admin commands
@@ -66,21 +66,6 @@ def format_section_short(c: dict) -> str:
     return f"`{c['section_id']}` — {c['title']} ({c['faculty']}, {c['term']})"
 
 
-# ---- Database ---------------------------------------------------------------
-
-
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS enrollments (
-            user_id TEXT NOT NULL,
-            section_id TEXT NOT NULL,
-            PRIMARY KEY (user_id, section_id)
-        )
-    """)
-    return conn
-
-
 # ---- Commands ---------------------------------------------------------------
 
 
@@ -110,14 +95,18 @@ def enroll(ack, command, respond):
     section = matches[0]
     user_id = command["user_id"]
     with get_db() as conn:
-        try:
-            conn.execute(
-                "INSERT INTO enrollments VALUES (?, ?)",
-                (user_id, section["section_id"]),
-            )
-            ephemeral(respond, f"Enrolled in:\n{format_section(section)}")
-        except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT 1 FROM enrollments WHERE user_id = ? AND section_id = ?",
+            (user_id, section["section_id"]),
+        ).fetchone()
+        if existing:
             ephemeral(respond, f"You're already enrolled in `{section['section_id']}`.")
+            return
+        conn.execute(
+            "INSERT INTO enrollments VALUES (?, ?)",
+            (user_id, section["section_id"]),
+        )
+    ephemeral(respond, f"Enrolled in:\n{format_section(section)}")
 
 
 @app.command("/unenroll")
@@ -140,14 +129,18 @@ def unenroll(ack, command, respond):
     section = matches[0]
     user_id = command["user_id"]
     with get_db() as conn:
-        cursor = conn.execute(
+        existing = conn.execute(
+            "SELECT 1 FROM enrollments WHERE user_id = ? AND section_id = ?",
+            (user_id, section["section_id"]),
+        ).fetchone()
+        if not existing:
+            ephemeral(respond, f"You weren't enrolled in `{section['section_id']}`.")
+            return
+        conn.execute(
             "DELETE FROM enrollments WHERE user_id = ? AND section_id = ?",
             (user_id, section["section_id"]),
         )
-        if cursor.rowcount:
-            ephemeral(respond, f"Removed from *{section['title']}* (`{section['section_id']}`).")
-        else:
-            ephemeral(respond, f"You weren't enrolled in `{section['section_id']}`.")
+    ephemeral(respond, f"Removed from *{section['title']}* (`{section['section_id']}`).")
 
 
 @app.command("/myclasses")
