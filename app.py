@@ -3,11 +3,15 @@ import os
 from pathlib import Path
 
 from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_bolt.adapter.flask import SlackRequestHandler
+from flask import Flask, request
 
 from db import get_db
 
-app = App(token=os.environ["SLACK_BOT_TOKEN"])
+app = App(
+    token=os.environ["SLACK_BOT_TOKEN"],
+    signing_secret=os.environ["SLACK_SIGNING_SECRET"],
+)
 
 CATALOG_PATH = Path(__file__).parent / "courses.json"
 
@@ -261,6 +265,21 @@ def popular(ack, command, respond):
     ephemeral(respond, "*Top 5 most popular classes:*\n" + "\n".join(lines))
 
 
+# ---- HTTP server (Render Web Service) --------------------------------------
+
+flask_app = Flask(__name__)
+_handler = SlackRequestHandler(app)
+
+
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return _handler.handle(request)
+
+
+@flask_app.route("/", methods=["GET"])
+def health():
+    return "OK", 200
+
+
 if __name__ == "__main__":
-    handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
-    handler.start()
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))

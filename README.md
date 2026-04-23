@@ -26,11 +26,11 @@ If you run `/enroll 2000`, the bot will list both sections and ask you to pick o
 ### 1. Create a Slack App
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
-2. Enable **Socket Mode**, generate an **App-Level Token** with `connections:write` → this is your `SLACK_APP_TOKEN`
+2. Under **Basic Information**, copy the **Signing Secret** → this is your `SLACK_SIGNING_SECRET`
 3. Under **OAuth & Permissions**, add Bot Token Scopes:
    - `commands`
    - `chat:write`
-4. Under **Slash Commands**, create: `/enroll`, `/unenroll`, `/myclasses`, `/classmates`, `/coursesearch`
+4. Under **Slash Commands**, create `/enroll`, `/unenroll`, `/myclasses`, `/classmates`, `/coursesearch`, `/popular`. For each, set **Request URL** to `https://<your-render-service>.onrender.com/slack/events` (you'll get this URL from Render in step 2 below).
 5. Install to workspace → copy the **Bot User OAuth Token** → this is your `SLACK_BOT_TOKEN`
 
 ### 2. Run
@@ -43,11 +43,11 @@ cp .env.example .env   # then fill in your tokens
 Windows PowerShell:
 ```powershell
 $env:SLACK_BOT_TOKEN="xoxb-..."
-$env:SLACK_APP_TOKEN="xapp-..."
+$env:SLACK_SIGNING_SECRET="..."
 python app.py
 ```
 
-Socket Mode means no public URL is needed.
+Flask will listen on `http://localhost:3000/slack/events`. For local dev you'll need a public tunnel (e.g., `ngrok http 3000`) to point Slack at your machine.
 
 ## Cloud Deploy (Turso + Render)
 
@@ -75,18 +75,19 @@ Save both values — you'll paste them into Render.
 ### 2. Deploy to Render
 
 1. Log in to [render.com](https://render.com) and click **New +** → **Blueprint**.
-2. Connect your GitHub and select `kheganm/hls-class-finder`. Render will detect `render.yaml` and create a **Background Worker** named `hls-class-finder`.
+2. Connect your GitHub and select `kheganm/hls-class-finder`. Render will detect `render.yaml` and create a **Web Service** named `hls-class-finder`.
 3. When prompted, fill in these five environment variables:
    - `SLACK_BOT_TOKEN` — `xoxb-…`
-   - `SLACK_APP_TOKEN` — `xapp-…`
+   - `SLACK_SIGNING_SECRET` — from Slack app **Basic Information** page
    - `SLACK_ADMIN_USER_IDS` — comma-separated Slack user IDs
    - `TURSO_DATABASE_URL` — `libsql://…turso.io`
    - `TURSO_AUTH_TOKEN` — the token you created
-4. Click **Apply**. Render builds and starts the worker. Check the logs — you should see `⚡️ Bolt app is running!`.
+4. Click **Apply**. Render builds and starts the service. Once live, copy the service URL (e.g., `https://hls-class-finder.onrender.com`).
+5. **Go back to Slack** and update each slash command's **Request URL** to `https://<your-render-url>/slack/events`.
 
 Every `git push` to `main` will redeploy automatically.
 
-> **Note on Render free tier:** Background Workers on the free plan sleep after inactivity. Because this bot uses Socket Mode (a persistent websocket), Slack keeps the connection active — but if the worker does sleep, Slack commands will fail until it wakes. If you need hard uptime guarantees, upgrade to the Starter plan (~$7/mo).
+> **Note on Render free tier:** Free Web Services spin down after 15 min of inactivity. Slack slash commands time out at 3 seconds, so the first command after a sleep will likely fail — subsequent ones will work once the service has spun up (~30s). If reliability matters, either upgrade to Starter ($7/mo) for always-on, or set up a cron-style pinger that hits `/` every 10 minutes to keep the service warm.
 
 ## Updating the Catalog
 

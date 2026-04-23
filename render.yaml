@@ -1,14 +1,15 @@
 services:
-  - type: worker
+  - type: web
     name: hls-class-finder
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    startCommand: gunicorn app:flask_app --bind 0.0.0.0:$PORT --workers 1 --timeout 30
+    healthCheckPath: /
     envVars:
       - key: SLACK_BOT_TOKEN
         sync: false
-      - key: SLACK_APP_TOKEN
+      - key: SLACK_SIGNING_SECRET
         sync: false
       - key: SLACK_ADMIN_USER_IDS
         sync: false

@@ -1,3 +1,5 @@
 slack-bolt>=1.18.0
 slack-sdk>=3.26.0
-libsql-experimental>=0.0.40
+flask>=3.0.0
+gunicorn>=21.2.0
+requests>=2.31.0
