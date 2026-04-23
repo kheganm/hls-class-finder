@@ -11,6 +11,7 @@ A Slack app that lets Harvard Law students register their 2026–2027 classes an
 | `/myclasses` | List all your classes with full details |
 | `/classmates <course# or section id>` | See who else is in a class |
 | `/coursesearch <keyword>` | Search the catalog by title, faculty, or subject area |
+| `/classhelp` | Show a list of all available commands |
 
 ### Section IDs
 

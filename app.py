@@ -249,6 +249,30 @@ def course_search(ack, command, respond):
     ephemeral(respond, f"*Found {len(matches)} course(s) matching `{query}`:*\n" + "\n".join(lines) + extra)
 
 
+@app.command("/classhelp")
+def class_help(ack, command, respond):
+    ack()
+    is_admin = command["user_id"] in ADMIN_USER_IDS
+    lines = [
+        "*HLS Class Finder — available commands:*",
+        "",
+        "• `/enroll <course# | section id | name>` — add yourself to a class",
+        "• `/unenroll <course# | section id>` — remove yourself from a class",
+        "• `/myclasses` — list your classes with full details",
+        "• `/classmates <course# | section id>` — see who else is in a class",
+        "• `/coursesearch <keyword>` — search the catalog by title, faculty, or subject",
+        "• `/classhelp` — show this message",
+    ]
+    if is_admin:
+        lines.append("• `/popular` — _(admin)_ top 5 most-enrolled classes")
+    lines += [
+        "",
+        "_Tip:_ Section ids look like `2000-Block-2027SP`. If a course has multiple sections, "
+        "`/enroll` will list them and ask you to pick one.",
+    ]
+    ephemeral(respond, "\n".join(lines))
+
+
 @app.command("/popular")
 def popular(ack, command, respond):
     ack()
