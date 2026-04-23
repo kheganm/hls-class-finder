@@ -1,0 +1,8 @@
+.env
+.claude/
+enrollments.db
+classes.db
+__pycache__/
+*.pyc
+.venv/
+venv/
