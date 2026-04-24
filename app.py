@@ -275,22 +275,65 @@ def fetch_user_sections(user_id: str) -> list[dict]:
 @app.command("/enroll")
 def enroll(ack, command, respond):
     ack()
-    query = command["text"].strip()
-    if not query:
-        ephemeral(respond, "Usage: `/enroll <course number | section id | name | faculty>`")
+    raw = command["text"].strip()
+    if not raw:
+        ephemeral(respond,
+                  "Usage: `/enroll <course>` — or paste a comma-separated list "
+                  "to enroll in several at once: `/enroll 2048-Coates-2027SP, "
+                  "2000-Block-2027SP, 3033-Sachs-2026FA`")
         return
 
-    matches = find_sections(query)
+    # Bulk mode: comma-separated list of queries
+    if "," in raw:
+        _enroll_bulk(command["user_id"], raw, respond)
+        return
+
+    matches = find_sections(raw)
     if not matches:
-        ephemeral(respond, f"No courses found matching `{query}`. Try `/coursesearch <keyword>`.")
+        ephemeral(respond, f"No courses found matching `{raw}`. Try `/coursesearch <keyword>`.")
         return
 
     if len(matches) > 1:
-        ephemeral(respond, blocks=picker_blocks(query, matches, "enroll_pick"))
+        ephemeral(respond, blocks=picker_blocks(raw, matches, "enroll_pick"))
         return
 
     _, msg = do_enroll(command["user_id"], matches[0]["section_id"])
     ephemeral(respond, msg)
+
+
+def _enroll_bulk(user_id: str, raw: str, respond) -> None:
+    """Enroll in many courses at once from a comma-separated input."""
+    queries = [q.strip() for q in raw.split(",") if q.strip()]
+    if not queries:
+        ephemeral(respond, "No courses found in that list.")
+        return
+
+    lines = [f"*Bulk enroll — {len(queries)} item(s):*", ""]
+    enrolled = 0
+    for q in queries:
+        matches = find_sections(q)
+        if not matches:
+            lines.append(f"❌ `{q}` — no match")
+            continue
+        if len(matches) > 1:
+            top = ", ".join(f"`{m['section_id']}`" for m in matches[:3])
+            more = f" (+{len(matches) - 3} more)" if len(matches) > 3 else ""
+            lines.append(
+                f"⚠️ `{q}` — {len(matches)} matches; be specific. Try one of: {top}{more}"
+            )
+            continue
+        section = matches[0]
+        new, msg = do_enroll(user_id, section["section_id"])
+        if new:
+            enrolled += 1
+            last = _primary_lastname(section["faculty"])
+            lines.append(f"✅ `{section['section_id']}` — {section['title']} ({last})")
+        else:
+            # already enrolled
+            lines.append(f"• `{section['section_id']}` — already enrolled")
+    lines.append("")
+    lines.append(f"_Enrolled in {enrolled} new course(s)._")
+    ephemeral(respond, "\n".join(lines))
 
 
 @app.action("enroll_pick")
@@ -465,7 +508,7 @@ def class_help(ack, command, respond):
     lines = [
         "*📚 HLS Class Finder — commands*",
         "",
-        "• `/enroll <course# | section id | name | faculty>` — add yourself to a class",
+        "• `/enroll <course# | section id | name | faculty>` — add yourself to a class. Paste a comma-separated list to enroll in several at once.",
         "• `/unenroll <course# | section id>` — remove yourself",
         "• `/myclasses` — list your classes",
         "• `/classmates <course# | section id>` — see who else is in a class (with a button to share the roster to a channel)",
