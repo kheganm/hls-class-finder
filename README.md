@@ -28,11 +28,18 @@ If you run `/enroll 2000`, the bot will list both sections and ask you to pick o
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
 2. Under **Basic Information**, copy the **Signing Secret** → this is your `SLACK_SIGNING_SECRET`
-3. Under **OAuth & Permissions**, add Bot Token Scopes:
+3. **OAuth & Permissions** → add Bot Token Scopes:
    - `commands`
    - `chat:write`
-4. Under **Slash Commands**, create `/enroll`, `/unenroll`, `/myclasses`, `/classmates`, `/coursesearch`, `/popular`. For each, set **Request URL** to `https://<your-render-service>.onrender.com/slack/events` (you'll get this URL from Render in step 2 below).
-5. Install to workspace → copy the **Bot User OAuth Token** → this is your `SLACK_BOT_TOKEN`
+   - `chat:write.public` _(lets the bot post in channels it hasn't been invited to, for the share-classmates button)_
+4. **Slash Commands** → create the seven commands, all with Request URL `https://<your-render-service>.onrender.com/slack/events`:
+   - `/enroll`, `/unenroll`, `/myclasses`, `/classmates`, `/coursesearch`, `/classhelp`, `/popular`
+5. **Interactivity & Shortcuts** → toggle on. Request URL: `https://<your-render-service>.onrender.com/slack/events`. (Needed for buttons, modals, and App Home actions.)
+6. **Event Subscriptions** → toggle on. Request URL: same as above. Under **Subscribe to bot events**, add `app_home_opened`.
+7. **App Home** → toggle **Home Tab** on. Leave **Messages Tab** off (optional).
+8. **Install App** → install to workspace → copy the **Bot User OAuth Token** → this is your `SLACK_BOT_TOKEN`
+
+> If you make scope changes later, you'll need to **Reinstall** the app.
 
 ### 2. Run
 

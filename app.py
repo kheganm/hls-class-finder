@@ -15,22 +15,27 @@ app = App(
 
 CATALOG_PATH = Path(__file__).parent / "courses.json"
 
-# Comma-separated Slack user IDs (e.g. "U01ABC,U02XYZ") allowed to run admin commands
+# Comma-separated Slack user IDs allowed to run admin commands
 ADMIN_USER_IDS = {
     uid.strip() for uid in os.environ.get("SLACK_ADMIN_USER_IDS", "").split(",") if uid.strip()
 }
 
 
-def ephemeral(respond, text: str):
-    """Force ephemeral (only the invoking user sees it)."""
-    respond(response_type="ephemeral", text=text)
+def ephemeral(respond, text=None, blocks=None):
+    payload = {"response_type": "ephemeral"}
+    if text is not None:
+        payload["text"] = text
+    if blocks is not None:
+        payload["blocks"] = blocks
+        payload.setdefault("text", "")  # fallback
+    respond(**payload)
 
-# ---- Catalog loading ---------------------------------------------------------
+
+# ---- Catalog loading -------------------------------------------------------
 
 with CATALOG_PATH.open(encoding="utf-8") as f:
     CATALOG: list[dict] = json.load(f)
 
-# Indexes for fast lookup
 BY_SECTION_ID: dict[str, dict] = {c["section_id"].upper(): c for c in CATALOG}
 BY_COURSE_NUM: dict[str, list[dict]] = {}
 for c in CATALOG:
@@ -38,10 +43,8 @@ for c in CATALOG:
 
 
 def _clean(query: str) -> str:
-    """Strip wrapping characters Slack commonly adds when users copy formatted text
-    (backticks from code spans, angle brackets from auto-linked URLs, smart quotes)."""
+    """Strip wrapping chars Slack adds on copy (backticks, <>, quotes)."""
     q = query.strip()
-    # Repeatedly strip any combo of these leading/trailing chars
     strip_chars = "`<>\"'“”‘’ \t"
     while q and q[0] in strip_chars:
         q = q[1:]
@@ -50,24 +53,56 @@ def _clean(query: str) -> str:
     return q
 
 
+def _faculty_lastnames(faculty: str) -> list[str]:
+    """Parse 'Block, Sharon; Vermeule, Adrian' → ['block', 'vermeule']."""
+    names = []
+    for entry in faculty.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        # "Lastname, Firstname" → take first comma-separated chunk
+        last = entry.split(",")[0].strip().lower()
+        if last:
+            names.append(last)
+    return names
+
+
 def find_sections(query: str) -> list[dict]:
-    """Resolve a user query to zero, one, or many catalog sections."""
+    """Resolve a user query to zero, one, or many catalog sections.
+
+    Matching priority:
+      1. Exact section_id (e.g. "2000-Block-2027SP")
+      2. Exact course number (e.g. "2000")
+      3. All tokens in the query appear somewhere in
+         title + faculty + course_number + term. This handles "block admin",
+         "admin law", "2000 vermeule", faculty-only like "macKinnon", etc.
+    """
     q = _clean(query)
     if not q:
         return []
 
-    # 1. Exact section_id
     if q.upper() in BY_SECTION_ID:
         return [BY_SECTION_ID[q.upper()]]
 
-    # 2. Exact course number
     if q in BY_COURSE_NUM:
         return list(BY_COURSE_NUM[q])
 
-    # 3. Title substring (case-insensitive)
-    q_lower = q.lower()
-    matches = [c for c in CATALOG if q_lower in c["title"].lower()]
+    tokens = [t.lower() for t in q.split() if t]
+    if not tokens:
+        return []
+
+    def haystack(c: dict) -> str:
+        return (
+            f"{c['title']} {c['faculty']} {c['course_number']} {c['term']} "
+            f"{c['subject_areas']}"
+        ).lower()
+
+    matches = [c for c in CATALOG if all(t in haystack(c) for t in tokens)]
+    matches.sort(key=lambda c: (c["title"], c["term"]))
     return matches
+
+
+# ---- Formatting helpers ----------------------------------------------------
 
 
 def format_section(c: dict) -> str:
@@ -80,10 +115,133 @@ def format_section(c: dict) -> str:
 
 
 def format_section_short(c: dict) -> str:
-    return f"`{c['section_id']}` — {c['title']} ({c['faculty']}, {c['term']})"
+    return f"*{c['title']}* — {c['faculty']} • {c['term']} • {c['credits']} cr"
 
 
-# ---- Commands ---------------------------------------------------------------
+def picker_blocks(query: str, matches: list[dict], action_id: str) -> list[dict]:
+    """Render a list of matching sections with a button for each. Used for
+    /enroll and /classmates disambiguation."""
+    blocks = [{
+        "type": "section",
+        "text": {"type": "mrkdwn", "text":
+                 f"*{len(matches)} sections match* `{query}`. Pick one:"}
+    }, {"type": "divider"}]
+
+    for c in matches[:10]:
+        label = {
+            "enroll_pick": "Enroll",
+            "classmates_pick": "See classmates",
+        }.get(action_id, "Select")
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": format_section_short(c)},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": label},
+                "action_id": action_id,
+                "value": c["section_id"],
+            },
+        })
+    if len(matches) > 10:
+        blocks.append({
+            "type": "context",
+            "elements": [{"type": "mrkdwn",
+                          "text": f"_…and {len(matches) - 10} more. Narrow your search._"}],
+        })
+    return blocks
+
+
+def classmates_blocks(section: dict, viewer_id: str, rows: list[tuple]) -> list[dict]:
+    """Render the classmates list + a Share-to-channel button."""
+    others = [r[0] for r in rows if r[0] != viewer_id]
+    you_enrolled = any(r[0] == viewer_id for r in rows)
+
+    lines = []
+    if you_enrolled:
+        lines.append("• You")
+    lines.extend(f"• <@{uid}>" for uid in others)
+    body = "\n".join(lines) if lines else "_No one else yet._"
+
+    return [
+        {"type": "header",
+         "text": {"type": "plain_text", "text": f"👥 {section['title']}"}},
+        {"type": "context", "elements": [
+            {"type": "mrkdwn",
+             "text": f"`{section['section_id']}` • {section['faculty']} • "
+                     f"{section['term']} • {len(rows)} enrolled"}
+        ]},
+        {"type": "section", "text": {"type": "mrkdwn", "text": body}},
+        {"type": "actions", "elements": [{
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📣 Share to this channel"},
+            "action_id": "share_classmates",
+            "value": section["section_id"],
+        }]},
+    ]
+
+
+# ---- Enroll / resolve helpers shared by commands & actions -----------------
+
+
+def do_enroll(user_id: str, section_id: str) -> tuple[bool, str]:
+    """Returns (newly_enrolled, message)."""
+    section = BY_SECTION_ID.get(section_id.upper())
+    if not section:
+        return False, f"Unknown section id `{section_id}`."
+
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM enrollments WHERE user_id = ? AND section_id = ?",
+            (user_id, section["section_id"]),
+        ).fetchone()
+        if existing:
+            return False, f"You're already enrolled in `{section['section_id']}`."
+        conn.execute(
+            "INSERT INTO enrollments VALUES (?, ?)",
+            (user_id, section["section_id"]),
+        )
+    return True, f"✅ Enrolled in:\n{format_section(section)}"
+
+
+def do_unenroll(user_id: str, section_id: str) -> tuple[bool, str]:
+    section = BY_SECTION_ID.get(section_id.upper())
+    if not section:
+        return False, f"Unknown section id `{section_id}`."
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM enrollments WHERE user_id = ? AND section_id = ?",
+            (user_id, section["section_id"]),
+        ).fetchone()
+        if not existing:
+            return False, f"You weren't enrolled in `{section['section_id']}`."
+        conn.execute(
+            "DELETE FROM enrollments WHERE user_id = ? AND section_id = ?",
+            (user_id, section["section_id"]),
+        )
+    return True, f"Removed from *{section['title']}* (`{section['section_id']}`)."
+
+
+def fetch_classmates(section_id: str) -> list[tuple]:
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT user_id FROM enrollments WHERE section_id = ? ORDER BY user_id",
+            (section_id,),
+        ).fetchall()
+
+
+def fetch_user_sections(user_id: str) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT section_id FROM enrollments WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    sections = [BY_SECTION_ID.get(r[0].upper()) for r in rows]
+    sections = [s for s in sections if s]
+    sections.sort(key=lambda c: (c["term"], c["title"]))
+    return sections
+
+
+# ---- Slash Commands --------------------------------------------------------
 
 
 @app.command("/enroll")
@@ -91,39 +249,29 @@ def enroll(ack, command, respond):
     ack()
     query = command["text"].strip()
     if not query:
-        ephemeral(respond, "Usage: `/enroll <course number | section id | course name>`")
+        ephemeral(respond, "Usage: `/enroll <course number | section id | name | faculty>`")
         return
 
     matches = find_sections(query)
-
     if not matches:
         ephemeral(respond, f"No courses found matching `{query}`. Try `/coursesearch <keyword>`.")
         return
 
     if len(matches) > 1:
-        lines = [format_section_short(c) for c in matches[:10]]
-        extra = f"\n…and {len(matches) - 10} more" if len(matches) > 10 else ""
-        ephemeral(respond, 
-            f"Multiple sections match `{query}`. Re-run with a specific section id:\n"
-            + "\n".join(lines) + extra
-        )
+        ephemeral(respond, blocks=picker_blocks(query, matches, "enroll_pick"))
         return
 
-    section = matches[0]
-    user_id = command["user_id"]
-    with get_db() as conn:
-        existing = conn.execute(
-            "SELECT 1 FROM enrollments WHERE user_id = ? AND section_id = ?",
-            (user_id, section["section_id"]),
-        ).fetchone()
-        if existing:
-            ephemeral(respond, f"You're already enrolled in `{section['section_id']}`.")
-            return
-        conn.execute(
-            "INSERT INTO enrollments VALUES (?, ?)",
-            (user_id, section["section_id"]),
-        )
-    ephemeral(respond, f"Enrolled in:\n{format_section(section)}")
+    _, msg = do_enroll(command["user_id"], matches[0]["section_id"])
+    ephemeral(respond, msg)
+
+
+@app.action("enroll_pick")
+def enroll_pick(ack, body, respond):
+    ack()
+    section_id = body["actions"][0]["value"]
+    user_id = body["user"]["id"]
+    _, msg = do_enroll(user_id, section_id)
+    respond(response_type="ephemeral", replace_original=True, text=msg)
 
 
 @app.command("/unenroll")
@@ -139,55 +287,42 @@ def unenroll(ack, command, respond):
         ephemeral(respond, f"No courses found matching `{query}`.")
         return
     if len(matches) > 1:
-        lines = [format_section_short(c) for c in matches[:10]]
-        ephemeral(respond, "Multiple sections match. Specify a section id:\n" + "\n".join(lines))
+        ephemeral(respond, blocks=picker_blocks(query, matches, "unenroll_pick"))
         return
 
-    section = matches[0]
-    user_id = command["user_id"]
-    with get_db() as conn:
-        existing = conn.execute(
-            "SELECT 1 FROM enrollments WHERE user_id = ? AND section_id = ?",
-            (user_id, section["section_id"]),
-        ).fetchone()
-        if not existing:
-            ephemeral(respond, f"You weren't enrolled in `{section['section_id']}`.")
-            return
-        conn.execute(
-            "DELETE FROM enrollments WHERE user_id = ? AND section_id = ?",
-            (user_id, section["section_id"]),
-        )
-    ephemeral(respond, f"Removed from *{section['title']}* (`{section['section_id']}`).")
+    _, msg = do_unenroll(command["user_id"], matches[0]["section_id"])
+    ephemeral(respond, msg)
+
+
+@app.action("unenroll_pick")
+def unenroll_pick(ack, body, respond, client):
+    ack()
+    section_id = body["actions"][0]["value"]
+    user_id = body["user"]["id"]
+    _, msg = do_unenroll(user_id, section_id)
+    respond(response_type="ephemeral", replace_original=True, text=msg)
+    # If triggered from App Home, refresh
+    if body.get("container", {}).get("type") == "view":
+        publish_home(user_id, client)
 
 
 @app.command("/myclasses")
 def my_classes(ack, command, respond):
     ack()
-    user_id = command["user_id"]
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT section_id FROM enrollments WHERE user_id = ?",
-            (user_id,),
-        ).fetchall()
-
-    if not rows:
+    sections = fetch_user_sections(command["user_id"])
+    if not sections:
         ephemeral(respond, "You're not enrolled in any classes. Use `/enroll <course>` to add one.")
         return
-
-    sections = [BY_SECTION_ID.get(r[0].upper()) for r in rows]
-    sections = [s for s in sections if s]
-    sections.sort(key=lambda c: (c["term"], c["title"]))
-
     blocks = [format_section(s) for s in sections]
     ephemeral(respond, "*Your classes:*\n\n" + "\n\n".join(blocks))
 
 
 @app.command("/classmates")
-def classmates(ack, command, respond):
+def classmates_cmd(ack, command, respond):
     ack()
     query = command["text"].strip()
     if not query:
-        ephemeral(respond, "Usage: `/classmates <course number | section id>`")
+        ephemeral(respond, "Usage: `/classmates <course number | section id | name>`")
         return
 
     matches = find_sections(query)
@@ -195,58 +330,104 @@ def classmates(ack, command, respond):
         ephemeral(respond, f"No courses found matching `{query}`.")
         return
     if len(matches) > 1:
-        lines = [format_section_short(c) for c in matches[:10]]
-        ephemeral(respond, "Multiple sections match. Specify a section id:\n" + "\n".join(lines))
+        ephemeral(respond, blocks=picker_blocks(query, matches, "classmates_pick"))
         return
 
     section = matches[0]
-    user_id = command["user_id"]
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT user_id FROM enrollments WHERE section_id = ? ORDER BY user_id",
-            (section["section_id"],),
-        ).fetchall()
-
+    rows = fetch_classmates(section["section_id"])
     if not rows:
-        ephemeral(respond, f"No one is enrolled in *{section['title']}* (`{section['section_id']}`) yet.")
+        ephemeral(respond,
+                  f"No one is enrolled in *{section['title']}* (`{section['section_id']}`) yet.")
         return
+    ephemeral(respond, blocks=classmates_blocks(section, command["user_id"], rows))
 
-    others = [r[0] for r in rows if r[0] != user_id]
-    you_enrolled = any(r[0] == user_id for r in rows)
 
-    lines = []
-    if you_enrolled:
-        lines.append("• You")
-    lines.extend(f"• <@{uid}>" for uid in others)
+@app.action("classmates_pick")
+def classmates_pick(ack, body, respond):
+    ack()
+    section_id = body["actions"][0]["value"]
+    section = BY_SECTION_ID.get(section_id.upper())
+    if not section:
+        respond(response_type="ephemeral", replace_original=True,
+                text=f"Unknown section `{section_id}`.")
+        return
+    rows = fetch_classmates(section["section_id"])
+    if not rows:
+        respond(response_type="ephemeral", replace_original=True,
+                text=f"No one is enrolled in *{section['title']}* yet.")
+        return
+    respond(response_type="ephemeral", replace_original=True,
+            blocks=classmates_blocks(section, body["user"]["id"], rows), text=" ")
 
-    header = f"*Students in {section['title']}* (`{section['section_id']}`):"
-    ephemeral(respond, header + "\n" + "\n".join(lines))
+
+@app.action("share_classmates")
+def share_classmates(ack, body, client, respond):
+    ack()
+    section_id = body["actions"][0]["value"]
+    section = BY_SECTION_ID.get(section_id.upper())
+    if not section:
+        return
+    rows = fetch_classmates(section["section_id"])
+    mentions = " ".join(f"<@{r[0]}>" for r in rows) or "_(no one yet)_"
+    channel_id = body.get("channel", {}).get("id")
+    if not channel_id:
+        respond(response_type="ephemeral", replace_original=False,
+                text="Can't share here — run `/classmates` from inside a channel.")
+        return
+    try:
+        client.chat_postMessage(
+            channel=channel_id,
+            text=f"Students in {section['title']}",
+            blocks=[
+                {"type": "header",
+                 "text": {"type": "plain_text", "text": f"👥 {section['title']}"}},
+                {"type": "context", "elements": [{"type": "mrkdwn",
+                    "text": f"`{section['section_id']}` • {section['faculty']} • "
+                            f"{section['term']} • {len(rows)} enrolled"}]},
+                {"type": "section", "text": {"type": "mrkdwn", "text": mentions}},
+                {"type": "context", "elements": [{"type": "mrkdwn",
+                    "text": f"_Shared by <@{body['user']['id']}> via HLS Class Finder_"}]},
+            ],
+        )
+        respond(response_type="ephemeral", replace_original=False,
+                text="✅ Shared to channel.")
+    except Exception as e:
+        respond(response_type="ephemeral", replace_original=False,
+                text=f"Couldn't post to channel: `{e}`. "
+                     "Make sure the bot is invited to this channel.")
 
 
 @app.command("/coursesearch")
 def course_search(ack, command, respond):
     ack()
-    query = command["text"].strip().lower()
+    query = command["text"].strip()
     if not query:
         ephemeral(respond, "Usage: `/coursesearch <keyword>`")
         return
 
-    matches = [
-        c for c in CATALOG
-        if query in c["title"].lower()
-        or query in c["faculty"].lower()
-        or query in c["subject_areas"].lower()
-    ]
-
+    matches = find_sections(query)
     if not matches:
         ephemeral(respond, f"No courses found matching `{query}`.")
         return
 
-    matches.sort(key=lambda c: c["title"])
-    shown = matches[:15]
-    lines = [format_section_short(c) for c in shown]
-    extra = f"\n…and {len(matches) - 15} more. Narrow your search." if len(matches) > 15 else ""
-    ephemeral(respond, f"*Found {len(matches)} course(s) matching `{query}`:*\n" + "\n".join(lines) + extra)
+    shown = matches[:10]
+    blocks = [{"type": "section", "text": {"type": "mrkdwn",
+        "text": f"*Found {len(matches)} course(s) matching* `{query}`:"}}]
+    for c in shown:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": format_section_short(c)},
+            "accessory": {
+                "type": "button",
+                "text": {"type": "plain_text", "text": "Enroll"},
+                "action_id": "enroll_pick",
+                "value": c["section_id"],
+            },
+        })
+    if len(matches) > 10:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
+            "text": f"_…and {len(matches) - 10} more. Narrow your search._"}]})
+    ephemeral(respond, blocks=blocks)
 
 
 @app.command("/classhelp")
@@ -254,21 +435,22 @@ def class_help(ack, command, respond):
     ack()
     is_admin = command["user_id"] in ADMIN_USER_IDS
     lines = [
-        "*HLS Class Finder — available commands:*",
+        "*📚 HLS Class Finder — commands*",
         "",
-        "• `/enroll <course# | section id | name>` — add yourself to a class",
-        "• `/unenroll <course# | section id>` — remove yourself from a class",
-        "• `/myclasses` — list your classes with full details",
-        "• `/classmates <course# | section id>` — see who else is in a class",
-        "• `/coursesearch <keyword>` — search the catalog by title, faculty, or subject",
+        "• `/enroll <course# | section id | name | faculty>` — add yourself to a class",
+        "• `/unenroll <course# | section id>` — remove yourself",
+        "• `/myclasses` — list your classes",
+        "• `/classmates <course# | section id>` — see who else is in a class (with a button to share the roster to a channel)",
+        "• `/coursesearch <keyword>` — browse the catalog",
         "• `/classhelp` — show this message",
     ]
     if is_admin:
         lines.append("• `/popular` — _(admin)_ top 5 most-enrolled classes")
     lines += [
         "",
-        "_Tip:_ Section ids look like `2000-Block-2027SP`. If a course has multiple sections, "
-        "`/enroll` will list them and ask you to pick one.",
+        "_Tip:_ You can search by faculty name too — `/enroll block admin` narrows "
+        "`admin law` to Prof. Block's section. Visit the bot's *Home* tab for a "
+        "visual dashboard.",
     ]
     ephemeral(respond, "\n".join(lines))
 
@@ -276,8 +458,7 @@ def class_help(ack, command, respond):
 @app.command("/popular")
 def popular(ack, command, respond):
     ack()
-    user_id = command["user_id"]
-    if user_id not in ADMIN_USER_IDS:
+    if command["user_id"] not in ADMIN_USER_IDS:
         ephemeral(respond, ":lock: This command is restricted to admins.")
         return
 
@@ -299,7 +480,74 @@ def popular(ack, command, respond):
         faculty = section["faculty"] if section else ""
         lines.append(f"{i}. *{title}* — {count} student(s)  `{section_id}` _{faculty}_")
 
-    ephemeral(respond, "*Top 5 most popular classes:*\n" + "\n".join(lines))
+    ephemeral(respond, "*🏆 Top 5 most popular classes:*\n" + "\n".join(lines))
+
+
+# ---- App Home --------------------------------------------------------------
+
+
+def publish_home(user_id: str, client):
+    """(Re)publish the App Home view for a user."""
+    sections = fetch_user_sections(user_id)
+
+    blocks: list[dict] = [
+        {"type": "header",
+         "text": {"type": "plain_text", "text": "📚 HLS Class Finder"}},
+        {"type": "context", "elements": [{"type": "mrkdwn",
+            "text": "Register your classes. Find classmates. "
+                    "Use `/classhelp` anywhere in Slack to see commands."}]},
+        {"type": "divider"},
+        {"type": "header",
+         "text": {"type": "plain_text", "text": "Your classes"}},
+    ]
+
+    if not sections:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn",
+            "text": "_You haven't enrolled in any classes yet._"}})
+    else:
+        for s in sections:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": format_section(s)},
+                "accessory": {
+                    "type": "button",
+                    "style": "danger",
+                    "text": {"type": "plain_text", "text": "Unenroll"},
+                    "action_id": "unenroll_pick",
+                    "value": s["section_id"],
+                    "confirm": {
+                        "title": {"type": "plain_text", "text": "Unenroll?"},
+                        "text": {"type": "mrkdwn",
+                                 "text": f"Remove yourself from *{s['title']}*?"},
+                        "confirm": {"type": "plain_text", "text": "Unenroll"},
+                        "deny": {"type": "plain_text", "text": "Cancel"},
+                    },
+                },
+            })
+
+    blocks += [
+        {"type": "divider"},
+        {"type": "header",
+         "text": {"type": "plain_text", "text": "Quick actions"}},
+        {"type": "section", "text": {"type": "mrkdwn",
+            "text": "Use these commands anywhere in Slack:\n"
+                    "• `/enroll <course>` — join a class\n"
+                    "• `/coursesearch <keyword>` — browse the catalog\n"
+                    "• `/classmates <course>` — see who's in a class\n"
+                    "• `/classhelp` — full command list"}},
+    ]
+
+    try:
+        client.views_publish(user_id=user_id, view={"type": "home", "blocks": blocks})
+    except Exception as e:
+        print(f"views_publish failed for {user_id}: {e}")
+
+
+@app.event("app_home_opened")
+def on_home_opened(event, client):
+    if event.get("tab") != "home":
+        return
+    publish_home(event["user"], client)
 
 
 # ---- HTTP server (Render Web Service) --------------------------------------
