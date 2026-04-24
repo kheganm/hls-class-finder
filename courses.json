@@ -60,6 +60,18 @@
     "schedule": "Wed 1:30 PM - 3:30 PM Thu 1:30 PM - 3:30 PM"
   },
   {
+    "section_id": "2000-Freeman-2026FA",
+    "title": "Administrative Law",
+    "course_number": "2000",
+    "term": "2026FA",
+    "faculty": "Freeman, Jody",
+    "credits": 4.0,
+    "type": "Multisection",
+    "subject_areas": "Administrative and Regulatory Law; Constitutional Law",
+    "delivery_mode": "Course",
+    "schedule": "Wed 1:30 PM - 3:30 PM Thu 1:30 PM - 3:30 PM"
+  },
+  {
     "section_id": "2001-Lawrence-2026FS",
     "title": "Advanced Clinical Practice",
     "course_number": "2001",
@@ -4210,6 +4222,18 @@
     "subject_areas": "Tax; Tax; Tax; Tax Law and Policy",
     "delivery_mode": "Course",
     "schedule": "Thu 10:15 AM - 12:15 PM Fri 10:15 AM - 12:15 PM"
+  },
+  {
+    "section_id": "2234-Desai-2026FA",
+    "title": "Taxation",
+    "course_number": "2234",
+    "term": "2026FA",
+    "faculty": "Desai, Mihir",
+    "credits": 4.0,
+    "type": "Multisection",
+    "subject_areas": "Tax; Tax; Tax; Administrative and Regulatory Law; Tax Law and Policy",
+    "delivery_mode": "Course",
+    "schedule": "Tue 3:45 PM - 5:45 PM Wed 3:45 PM - 5:45 PM"
   },
   {
     "section_id": "2636-Fisher-2027SP",
