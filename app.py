@@ -129,8 +129,7 @@ def format_section(c: dict) -> str:
     return (
         f"*{c['title']}* — `{c['section_id']}`\n"
         f"  Course #{c['course_number']} • {c['term']} • {c['credits']} credits\n"
-        f"  Faculty: {c['faculty']}\n"
-        f"  {c['delivery_mode']}"
+        f"  Faculty: {c['faculty']}"
     )
 
 
