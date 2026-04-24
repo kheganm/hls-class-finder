@@ -125,16 +125,25 @@ def find_sections(query: str, include_subjects: bool = False) -> list[dict]:
 # ---- Formatting helpers ----------------------------------------------------
 
 
+def _primary_lastname(faculty: str) -> str:
+    names = _faculty_lastnames(faculty)
+    return names[0].title() if names else ""
+
+
+def _fmt_credits(c: float) -> str:
+    return str(int(c)) if c == int(c) else f"{c:g}"
+
+
 def format_section(c: dict) -> str:
+    """Two-line course summary used everywhere (detailed view and pickers)."""
     return (
-        f"*{c['title']}* — `{c['section_id']}`\n"
-        f"  Course #{c['course_number']} • {c['term']} • {c['credits']} credits\n"
-        f"  Faculty: {c['faculty']}"
+        f"*{c['title']}* — {_primary_lastname(c['faculty'])}\n"
+        f"`{c['section_id']}` • #{c['course_number']} • {c['term']} • Cr: {_fmt_credits(c['credits'])}"
     )
 
 
-def format_section_short(c: dict) -> str:
-    return f"*{c['title']}* — {c['faculty']} • {c['term']} • {c['credits']} cr"
+# Pickers used to use a one-line variant; now identical to format_section.
+format_section_short = format_section
 
 
 def picker_blocks(query: str, matches: list[dict], action_id: str) -> list[dict]:
