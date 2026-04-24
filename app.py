@@ -67,15 +67,19 @@ def _faculty_lastnames(faculty: str) -> list[str]:
     return names
 
 
-def find_sections(query: str) -> list[dict]:
+def find_sections(query: str, include_subjects: bool = False) -> list[dict]:
     """Resolve a user query to zero, one, or many catalog sections.
 
-    Matching priority:
+    Matching priority (first tier that returns results wins):
       1. Exact section_id (e.g. "2000-Block-2027SP")
       2. Exact course number (e.g. "2000")
-      3. All tokens in the query appear somewhere in
-         title + faculty + course_number + term. This handles "block admin",
-         "admin law", "2000 vermeule", faculty-only like "macKinnon", etc.
+      3. All tokens appear in the title
+      4. All tokens appear in title + faculty + course# + term
+      5. (only if include_subjects=True) All tokens match including subject_areas
+
+    Subject areas are excluded by default because they're long
+    semicolon-separated lists that cause too many false positives for
+    disambiguation. /coursesearch opts in by passing include_subjects=True.
     """
     q = _clean(query)
     if not q:
@@ -91,15 +95,31 @@ def find_sections(query: str) -> list[dict]:
     if not tokens:
         return []
 
-    def haystack(c: dict) -> str:
-        return (
-            f"{c['title']} {c['faculty']} {c['course_number']} {c['term']} "
-            f"{c['subject_areas']}"
-        ).lower()
+    def _all_in(hay: str) -> bool:
+        return all(t in hay for t in tokens)
 
-    matches = [c for c in CATALOG if all(t in haystack(c) for t in tokens)]
-    matches.sort(key=lambda c: (c["title"], c["term"]))
-    return matches
+    # Tier 1: title-only
+    title_matches = [c for c in CATALOG if _all_in(c["title"].lower())]
+    if title_matches:
+        title_matches.sort(key=lambda c: (c["title"], c["term"]))
+        return title_matches
+
+    # Tier 2: title + faculty + course# + term
+    def core_hay(c: dict) -> str:
+        return f"{c['title']} {c['faculty']} {c['course_number']} {c['term']}".lower()
+
+    core_matches = [c for c in CATALOG if _all_in(core_hay(c))]
+    if core_matches or not include_subjects:
+        core_matches.sort(key=lambda c: (c["title"], c["term"]))
+        return core_matches
+
+    # Tier 3 (coursesearch only): include subject areas
+    def broad_hay(c: dict) -> str:
+        return f"{c['title']} {c['faculty']} {c['course_number']} {c['term']} {c['subject_areas']}".lower()
+
+    broad_matches = [c for c in CATALOG if _all_in(broad_hay(c))]
+    broad_matches.sort(key=lambda c: (c["title"], c["term"]))
+    return broad_matches
 
 
 # ---- Formatting helpers ----------------------------------------------------
@@ -127,7 +147,7 @@ def picker_blocks(query: str, matches: list[dict], action_id: str) -> list[dict]
                  f"*{len(matches)} sections match* `{query}`. Pick one:"}
     }, {"type": "divider"}]
 
-    for c in matches[:10]:
+    for c in matches[:5]:
         label = {
             "enroll_pick": "Enroll",
             "classmates_pick": "See classmates",
@@ -142,11 +162,11 @@ def picker_blocks(query: str, matches: list[dict], action_id: str) -> list[dict]
                 "value": c["section_id"],
             },
         })
-    if len(matches) > 10:
+    if len(matches) > 5:
         blocks.append({
             "type": "context",
             "elements": [{"type": "mrkdwn",
-                          "text": f"_…and {len(matches) - 10} more. Narrow your search._"}],
+                          "text": f"_…and {len(matches) - 5} more. Add another keyword (e.g. a faculty last name) to narrow._"}],
         })
     return blocks
 
@@ -405,12 +425,12 @@ def course_search(ack, command, respond):
         ephemeral(respond, "Usage: `/coursesearch <keyword>`")
         return
 
-    matches = find_sections(query)
+    matches = find_sections(query, include_subjects=True)
     if not matches:
         ephemeral(respond, f"No courses found matching `{query}`.")
         return
 
-    shown = matches[:10]
+    shown = matches[:5]
     blocks = [{"type": "section", "text": {"type": "mrkdwn",
         "text": f"*Found {len(matches)} course(s) matching* `{query}`:"}}]
     for c in shown:
@@ -424,9 +444,9 @@ def course_search(ack, command, respond):
                 "value": c["section_id"],
             },
         })
-    if len(matches) > 10:
+    if len(matches) > 5:
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-            "text": f"_…and {len(matches) - 10} more. Narrow your search._"}]})
+            "text": f"_…and {len(matches) - 5} more. Add another keyword to narrow._"}]})
     ephemeral(respond, blocks=blocks)
 
 
