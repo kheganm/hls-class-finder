@@ -1008,6 +1008,18 @@
     "schedule": "Thu 10:15 AM - 12:15 PM Fri 10:15 AM - 12:15 PM"
   },
   {
+    "section_id": "2048-Coates-2027SP",
+    "title": "Corporations",
+    "course_number": "2048",
+    "term": "2027SP",
+    "faculty": "Coates, John",
+    "credits": 4.0,
+    "type": "Multisection",
+    "subject_areas": "Corporate and Transactional Law",
+    "delivery_mode": "Course",
+    "schedule": "Mon 10:15 AM - 11:35 AM Tue 10:15 AM - 11:35 AM Wed 10:15 AM - 11:35 AM"
+  },
+  {
     "section_id": "8050-Rao-2027WS",
     "title": "Criminal Justice Appellate Clinic",
     "course_number": "8050",
