@@ -388,12 +388,64 @@ def my_classes(ack, command, respond):
     ephemeral(respond, "*Your classes:*\n\n" + "\n\n".join(blocks))
 
 
+def _classmates_all(user_id: str, respond) -> None:
+    """Show classmates across every class the user is enrolled in."""
+    sections = fetch_user_sections(user_id)
+    if not sections:
+        ephemeral(respond,
+                  "You're not enrolled in any classes yet. Use `/enroll <course>` first.")
+        return
+
+    section_ids = [s["section_id"] for s in sections]
+    placeholders = ",".join("?" * len(section_ids))
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT section_id, user_id FROM enrollments "
+            f"WHERE section_id IN ({placeholders})",
+            section_ids,
+        ).fetchall()
+
+    # Group classmates by section (excluding self)
+    from collections import defaultdict
+    by_section: dict[str, list[str]] = defaultdict(list)
+    for sid, uid in rows:
+        if uid != user_id:
+            by_section[sid].append(uid)
+
+    unique_classmates: set[str] = set()
+    for uids in by_section.values():
+        unique_classmates.update(uids)
+
+    lines = [
+        "*👥 All your classmates across every class:*",
+        "",
+    ]
+    for s in sections:
+        last = _primary_lastname(s["faculty"])
+        others = by_section.get(s["section_id"], [])
+        lines.append(f"*{s['title']}* — {last}  _(`{s['section_id']}`)_")
+        if others:
+            lines.append("  " + ", ".join(f"<@{uid}>" for uid in others))
+        else:
+            lines.append("  _No one else yet._")
+        lines.append("")
+
+    lines.append(
+        f"_Total: {len(unique_classmates)} unique classmate(s) across "
+        f"{len(sections)} class(es)._"
+    )
+    ephemeral(respond, "\n".join(lines))
+
+
 @app.command("/classmates")
 def classmates_cmd(ack, command, respond):
     ack()
     query = command["text"].strip()
+    user_id = command["user_id"]
+
+    # No argument → show classmates across ALL of the user's classes
     if not query:
-        ephemeral(respond, "Usage: `/classmates <course number | section id | name>`")
+        _classmates_all(user_id, respond)
         return
 
     matches = find_sections(query)
@@ -511,7 +563,8 @@ def class_help(ack, command, respond):
         "• `/enroll <course# | section id | name | faculty>` — add yourself to a class. Paste a comma-separated list to enroll in several at once.",
         "• `/unenroll <course# | section id>` — remove yourself",
         "• `/myclasses` — list your classes",
-        "• `/classmates <course# | section id>` — see who else is in a class (with a button to share the roster to a channel)",
+        "• `/classmates` — show classmates across *all* your classes",
+        "• `/classmates <course# | section id>` — see who's in a specific class (with a button to share the roster to a channel)",
         "• `/coursesearch <keyword>` — browse the catalog",
         "• `/classhelp` — show this message",
     ]
